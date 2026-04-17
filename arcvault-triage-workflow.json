@@ -1,0 +1,236 @@
+{
+  "name": "arcvault-triage-workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "triggerAtMinute": 1
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "fa91bbe4-175e-4d9c-b2c4-88e5153b0a8c",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  {\n    json: {\n      request_id: 'ARC-001',\n      source: 'Email',\n      raw_message: 'Hi, I tried logging in this morning and keep getting a 403 error. My account is arcvault.io/user/jsmith. This started after your update last Tuesday.',\n    },\n  },\n  {\n    json: {\n      request_id: 'ARC-002',\n      source: 'Web Form',\n      raw_message: \"We'd love to see a bulk export feature for our audit logs. We're a compliance-heavy org and this would save us hours every month.\",\n    },\n  },\n  {\n    json: {\n      request_id: 'ARC-003',\n      source: 'Support Portal',\n      raw_message: 'Invoice #8821 shows a charge of $1,240 but our contract rate is $980/month. Can someone look into this?',\n    },\n  },\n  {\n    json: {\n      request_id: 'ARC-004',\n      source: 'Email',\n      raw_message: \"I'm not sure if this is the right place to ask, but is there a way to set up SSO with Okta? We're evaluating switching our auth provider.\",\n    },\n  },\n  {\n    json: {\n      request_id: 'ARC-005',\n      source: 'Web Form',\n      raw_message: \"Your dashboard stopped loading for us around 2pm EST. Checked our end - it's definitely on yours. Multiple users affected.\",\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "60842964-e93f-4560-88ef-1468eba5becb",
+      "name": "Load Sample Inputs"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_GROQ_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama-3.3-70b-versatile\",\n  \"temperature\": 0,\n  \"response_format\": {\n    \"type\": \"json_object\"\n  },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an AI triage assistant for ArcVault, a B2B software company.\\n\\nAnalyze exactly one inbound customer request and return exactly one valid JSON object.\\n\\nYou must choose exactly one category from this list:\\n- Bug Report\\n- Feature Request\\n- Billing Issue\\n- Technical Question\\n- Incident/Outage\\n\\nYou must choose exactly one priority from this list:\\n- Low\\n- Medium\\n- High\\n\\nYou must return this exact JSON structure and no other keys:\\n{\\n  \\\"category\\\": \\\"Bug Report | Feature Request | Billing Issue | Technical Question | Incident/Outage\\\",\\n  \\\"priority\\\": \\\"Low | Medium | High\\\",\\n  \\\"confidence\\\": 0,\\n  \\\"core_issue\\\": \\\"string\\\",\\n  \\\"identifiers\\\": [\\\"string\\\"],\\n  \\\"urgency_signal\\\": \\\"low | moderate | high\\\",\\n  \\\"summary\\\": \\\"string\\\"\\n}\\n\\nHard rules:\\n- Return valid JSON only.\\n- Do not return markdown.\\n- Do not return code fences.\\n- Do not return any explanation before or after the JSON.\\n- \\\"confidence\\\" must be an integer from 0 to 100.\\n- Do not use decimals for confidence.\\n- \\\"identifiers\\\" must be an array of strings. If no identifiers are explicitly mentioned, return [].\\n- Never return nested objects for identifiers.\\n- \\\"urgency_signal\\\" must be exactly one of: low, moderate, high.\\n- Do not use Low, Medium, High for urgency_signal.\\n- \\\"core_issue\\\" must be exactly one sentence.\\n- \\\"summary\\\" must be 2 or 3 sentences for the receiving internal team.\\n- Extract only identifiers explicitly present in the message.\\n- Never use null values.\\n- Never change field names.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Analyze this inbound ArcVault customer request and return the required JSON object.\\n\\nSource: {{$json.source}}\\nRaw Message: {{$json.raw_message }}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        416,
+        0
+      ],
+      "id": "5438c6fd-01f3-4b64-98c0-33a876de2b0b",
+      "name": "LLM Classifier"
+    },
+    {
+      "parameters": {
+        "jsCode": "function normalizeModelOutput(parsed) {\n  const allowedCategories = [\n    'Bug Report',\n    'Feature Request',\n    'Billing Issue',\n    'Technical Question',\n    'Incident/Outage',\n  ];\n\n  const allowedPriorities = ['Low', 'Medium', 'High'];\n  const allowedUrgency = ['low', 'moderate', 'high'];\n\n  if (!allowedCategories.includes(parsed.category)) {\n    throw new Error(`Invalid category: ${parsed.category}`);\n  }\n\n  if (!allowedPriorities.includes(parsed.priority)) {\n    throw new Error(`Invalid priority: ${parsed.priority}`);\n  }\n\n  const confidence = Number(parsed.confidence);\n  if (!Number.isInteger(confidence) || confidence < 0 || confidence > 100) {\n    throw new Error(`Invalid confidence: ${parsed.confidence}`);\n  }\n\n  if (!Array.isArray(parsed.identifiers)) {\n    throw new Error('identifiers must be an array');\n  }\n\n  if (!allowedUrgency.includes(parsed.urgency_signal)) {\n    throw new Error(`Invalid urgency_signal: ${parsed.urgency_signal}`);\n  }\n\n  if (typeof parsed.core_issue !== 'string' || !parsed.core_issue.trim()) {\n    throw new Error('core_issue must be a non-empty string');\n  }\n\n  if (typeof parsed.summary !== 'string' || !parsed.summary.trim()) {\n    throw new Error('summary must be a non-empty string');\n  }\n\n  return {\n    category: parsed.category,\n    priority: parsed.priority,\n    confidence,\n    core_issue: parsed.core_issue.trim(),\n    identifiers: parsed.identifiers.map(String),\n    urgency_signal: parsed.urgency_signal,\n    summary: parsed.summary.trim(),\n  };\n}\n\nreturn items.map((item, index) => {\n  const content = item.json.choices?.[0]?.message?.content;\n\n  if (!content) {\n    throw new Error(`Missing model content for item ${index}`);\n  }\n\n  const parsed = JSON.parse(content);\n  const normalized = normalizeModelOutput(parsed);\n  const original = $('Load Sample Inputs').all()[index].json;\n\n  return {\n    json: {\n      request_id: original.request_id,\n      source: original.source,\n      raw_message: original.raw_message,\n      ...normalized,\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        0
+      ],
+      "id": "132630c5-bdf3-44b0-b81f-ec424779db77",
+      "name": "Parse LLM JSON"
+    },
+    {
+      "parameters": {
+        "jsCode": "function getRecommendedQueue(category, rawMessage) {\n  const text = rawMessage.toLowerCase();\n\n  if (category === 'Bug Report') {\n    return 'Engineering';\n  }\n\n  if (category === 'Incident/Outage') {\n    return 'Engineering';\n  }\n\n  if (category === 'Feature Request') {\n    return 'Product';\n  }\n\n  if (category === 'Billing Issue') {\n    return 'Billing';\n  }\n\n  if (category === 'Technical Question') {\n    const securityKeywords = ['sso', 'okta', 'auth', 'authentication', 'saml', 'oauth', 'security'];\n    if (securityKeywords.some((keyword) => text.includes(keyword))) {\n      return 'IT/Security';\n    }\n    return 'Engineering';\n  }\n\n  return 'Human Review / Escalation';\n}\n\nfunction getBillingDiscrepancy(rawMessage) {\n  const matches = [...rawMessage.matchAll(/\\$([0-9,]+(?:\\.[0-9]{2})?)/g)];\n  if (matches.length < 2) {\n    return 0;\n  }\n\n  const values = matches\n    .map((match) => Number(match[1].replace(/,/g, '')))\n    .filter((value) => !Number.isNaN(value));\n\n  if (values.length < 2) {\n    return 0;\n  }\n\n  return Math.abs(values[0] - values[1]);\n}\n\nreturn items.map((item) => {\n  const record = item.json;\n  const rawMessage = record.raw_message || '';\n  const text = rawMessage.toLowerCase();\n\n  const recommendedQueue = getRecommendedQueue(record.category, rawMessage);\n  const escalationReasons = [];\n\n  if ((record.confidence ?? 0) < 70) {\n    escalationReasons.push('confidence below 70');\n  }\n\n  const outagePatterns = [\n    'outage',\n    'multiple users affected',\n    'all users',\n    'system down',\n    'service down',\n    'dashboard stopped loading',\n    'down for everyone',\n  ];\n\n  if (outagePatterns.some((pattern) => text.includes(pattern))) {\n    escalationReasons.push('possible outage or broad impact detected');\n  }\n\n  if (text.includes('multiple users affected')) {\n    escalationReasons.push('multiple users affected');\n  }\n\n  if (record.category === 'Billing Issue') {\n    const discrepancy = getBillingDiscrepancy(rawMessage);\n    if (discrepancy > 500) {\n      escalationReasons.push(`billing discrepancy exceeds threshold: $${discrepancy}`);\n    }\n  }\n\n  const escalate = escalationReasons.length > 0;\n  const finalQueue = escalate ? 'Human Review / Escalation' : recommendedQueue;\n\n  return {\n    json: {\n      ...record,\n      recommended_queue: recommendedQueue,\n      final_queue: finalQueue,\n      escalate,\n      escalation_reasons: escalationReasons,\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        64
+      ],
+      "id": "8269dfd3-23bd-4c69-9bba-4e74b7f7c94a",
+      "name": "Route And Escalate"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "records",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        976,
+        64
+      ],
+      "id": "575940cd-43fd-415c-b65b-574b8a7049cf",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $json.records || [];\n\nreturn [\n  {\n    json: {\n      fileName: 'outputs.json',\n      fileContent: JSON.stringify(records, null, 2),\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1184,
+        64
+      ],
+      "id": "e883afa4-2802-430d-aa6e-883095a99aa6",
+      "name": "Build Outputs JSON"
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "fileContent",
+        "options": {
+          "fileName": "={{$json.fileName}}"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1392,
+        64
+      ],
+      "id": "1961e412-0557-4ab9-9296-6989b8e6245f",
+      "name": "Convert to File"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Sample Inputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Sample Inputs": {
+      "main": [
+        [
+          {
+            "node": "LLM Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Classifier": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM JSON": {
+      "main": [
+        [
+          {
+            "node": "Route And Escalate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route And Escalate": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Build Outputs JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Outputs JSON": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "4cc4bd05-5f4f-4c1f-85a1-d069e91dfaf7",
+  "meta": {
+    "instanceId": "141be9e414c3611a2d2b0e524542a87b6484f526e670578a1dd60d95aa8b1306"
+  },
+  "id": "yNk9eNw2z4uk031A",
+  "tags": []
+}
