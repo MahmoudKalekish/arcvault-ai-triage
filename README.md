@@ -112,6 +112,8 @@ That separation is deliberate. It keeps operational decisioning deterministic, t
 8. Add `Convert to File` to generate `outputs.json`.
 9. Run the workflow and download the generated file from the n8n UI.
 
+<img width="1787" height="772" alt="image" src="https://github.com/user-attachments/assets/055b27d5-b863-4d6b-9cc8-2da68465a25a" />
+
 ## Common Failure Modes And Fixes
 
 ### Malformed JSON
